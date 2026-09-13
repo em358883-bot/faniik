@@ -1,34 +1,69 @@
-name: Build Fanik APK
+name: Rebuild and Patch Fanik APK for Android 13
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
-  build:
+  patch-apk:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+      - name: Set up Java JDK
+        uses: actions/setup-java@v4
         with:
-          channel: stable
-          cache: true
+          distribution: 'temurin'
+          java-version: '17'
 
-      - name: Generate Android platform
-        run: flutter create --platforms=android --org com.fanik .
+      - name: Install Build Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apktool zipalign curl wget
 
-      - name: Get packages
-        run: flutter pub get
+      - name: Download APK from Google Drive
+        run: |
+          FILE_ID="1L5usNhilPhisQ6Vt92qGesOXTHVxa-qz"
+          curl -L -c /tmp/cookies "https://docs.google.com/uc?export=download&id=${FILE_ID}" > /tmp/confirm.html
+          CONFIRM=$(grep -o 'confirm=[^&]*' /tmp/confirm.html | head -n 1)
+          curl -L -b /tmp/cookies "https://docs.google.com/uc?export=download&confirm=${CONFIRM#confirm=}&id=${FILE_ID}" -o app-release.apk
 
-      - name: Build release APK
-        run: flutter build apk --release
+      - name: Verify Downloaded APK
+        run: |
+          if [ ! -s app-release.apk ]; then
+            echo "Error: APK file download failed or empty!"
+            exit 1
+          fi
 
-      - name: Upload APK
+      - name: Decompile APK
+        run: |
+          apktool d app-release.apk -o decompiled_app -f
+
+      - name: Update SDK Versions for Android 13
+        run: |
+          sed -i 's/targetSdkVersion: .*/targetSdkVersion: '\''33'\''/' decompiled_app/apktool.yml
+          sed -i 's/minSdkVersion: .*/minSdkVersion: '\''21'\''/' decompiled_app/apktool.yml
+
+      - name: Rebuild Unsigned APK
+        run: |
+          apktool b decompiled_app -o unsigned_app.apk
+
+      - name: ZipAlign APK
+        run: |
+          zipalign -v -p 4 unsigned_app.apk aligned_app.apk
+
+      - name: Sign APK with Uber APK Signer
+        run: |
+          wget https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
+          java -jar uber-apk-signer-1.3.0.jar --apks aligned_app.apk --out .
+          mv aligned_app-aligned-signed.apk fanik-patched.apk
+
+      - name: Upload Patched APK
         uses: actions/upload-artifact@v4
         with:
-          name: Fanik-APK
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: fanik-patched-android13
+          path: fanik-patched.apk
