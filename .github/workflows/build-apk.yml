@@ -23,19 +23,38 @@ jobs:
       - name: Install Build Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y apktool zipalign curl wget
+          sudo apt-get install -y apktool zipalign curl wget unzip 
 
-      - name: Download APK from Google Drive
+      - name: Install gdown
         run: |
-          FILE_ID="1L5usNhilPhisQ6Vt92qGesOXTHVxa-qz"
-          curl -L -c /tmp/cookies "https://docs.google.com/uc?export=download&id=${FILE_ID}" > /tmp/confirm.html
-          CONFIRM=$(grep -o 'confirm=[^&]*' /tmp/confirm.html | head -n 1)
-          curl -L -b /tmp/cookies "https://docs.google.com/uc?export=download&confirm=${CONFIRM#confirm=}&id=${FILE_ID}" -o app-release.apk
+          python3 -m pip install --upgrade pip
+          pip install gdown
 
-      - name: Verify Downloaded APK
+      - name: Download APK from Google Drive (gdown)
         run: |
-          if [ ! -s app-release.apk ]; then
-            echo "Error: APK file download failed or empty!"
+          FILE_ID="1D0MR8xYsqg3awVF4IhagmYCGUkKfRcNs"
+          # Try up to 3 times in case of transient network issues
+          for i in 1 2 3; do
+            echo "Attempt $i to download APK..."
+            gdown --id "$FILE_ID" -O app-release.apk && break || sleep 5
+          done
+
+      - name: Verify downloaded APK (binary + zip test)
+        run: |
+          echo "file output:"
+          file app-release.apk || true
+          # Require a minimal reasonable size (e.g. 100KB) to avoid HTML or empty files
+          MIN_SIZE=102400
+          if [ ! -s app-release.apk ] || [ $(stat -c%s app-release.apk) -lt $MIN_SIZE ]; then
+            echo "Error: app-release.apk is missing or unexpectedly small (size < $MIN_SIZE)."
+            echo "Showing first 200 bytes for debugging:"
+            head -c 200 app-release.apk | sed -n '1,200p'
+            exit 1
+          fi
+          # Quick zip sanity check
+          if ! unzip -tq app-release.apk >/dev/null 2>&1; then
+            echo "Error: app-release.apk is not a valid ZIP/APK. Showing first 200 bytes for debugging:"
+            head -c 200 app-release.apk | sed -n '1,200p'
             exit 1
           fi
 
